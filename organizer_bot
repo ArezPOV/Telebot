@@ -1,0 +1,100 @@
+import requests
+import re
+
+import logging
+import telebot
+import pandas as pd
+from telebot import types
+from constants import TG_TOKEN
+
+logger = telebot.logger
+telebot.logger.setLevel(logging.DEBUG)
+
+
+class User:
+    def __init__(self, name, currency, money):
+        self.name = name
+        self.currency = currency
+        self.money = money
+
+
+def run_organizer_bot(token: str) -> None:
+    """Run financial organizer bot that helps you to spend money wisely"""
+    bot = telebot.TeleBot(token, parse_mode=None)
+    user_dict = {}
+
+    @bot.message_handler(commands=['help', 'start'])
+    def welcome_screen(message):
+        chat_id = message.chat.id
+        user = User(name=message.from_user.first_name, currency=None, money=None)
+        user_dict[chat_id] = user
+
+        welcome_sticker = open('images/leo.webp', 'rb')
+        bot.send_sticker(message.chat.id, welcome_sticker)
+        bot.send_message(message.chat.id, "Welcome, {0.first_name}!".format(message.from_user, bot.get_me()) +
+                         "\nMy name is <b>{1.first_name}</b>.".format(message.from_user, bot.get_me()) +
+                         "\nI'm here to help you spend money <b>wisely!</b>", parse_mode='html')
+        bot.send_message(message.chat.id, "I'm a financial organizer. I can do a few things for now:")
+        bot.send_message(message.chat.id, "1. Add and save your current financial data\n"
+                                          "2. Gather information about your expenditures\n"
+                                          "3. Analyze the collected data and provide information about " +
+                         "significant expenses.\n"
+                                          "4. Offer advice on reducing expenses based on the gathered data.")
+
+        markup_main = types.ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True, row_width=2)
+        key_reg = types.KeyboardButton("/registration")
+        key_balance = types.KeyboardButton("/my_balance")
+        key_add_money = types.KeyboardButton("/add_money")
+        markup_main.add(key_reg, key_balance, key_add_money)
+        bot.send_message(message.chat.id, "Hello "
+                         + message.from_user.first_name
+                         + ", what do you like to do?", reply_markup=markup_main)
+
+    @bot.message_handler(commands=['registration'])
+    def add_currency(message):
+        try:
+            chat_id = message.chat.id
+            user = user_dict[chat_id]
+            markup = types.ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
+            key_usd = types.KeyboardButton('US Dollar 🇺🇸')
+            key_eur = types.KeyboardButton('Euro 🇪🇺')
+            key_rub = types.KeyboardButton('Ruble 🇷🇺')
+            markup.add(key_usd, key_eur, key_rub)
+            bot.send_message(chat_id, 'Your currency?', reply_markup=markup)
+            user.currency = message.text
+            if message.text == key_usd or key_rub or key_eur:
+                msg = bot.send_message(chat_id, "Your balance? (Integer/float)")
+                bot.register_next_step_handler(msg, base_balance)
+            else:
+                bot.send_message(chat_id, 'Just choose currency, push the button!')
+
+        except Exception as e:
+            bot.reply_to(message, 'Something is wrong, try again!')
+
+    def base_balance(message):
+        try:
+            chat_id = message.chat.id
+            user = user_dict[chat_id]
+
+            if message.text.isDigit():
+                user.balance = message.text
+                bot.send_message(chat_id, "Thank you, now you can start recording all your expenses and income")
+
+        except Exception as e:
+            bot.reply_to(message, 'Something is wrong, try again!')
+
+    def save_user_data_to_file(user):
+        user_data = pd.DataFrame({
+            'Name': [user.name],
+            'Currency': [user.currency],
+            'Money': [user.money]
+        })
+        user_data.to_excel("tg_users.xlsx", index=False)
+
+    bot.enable_save_next_step_handlers(delay=2)
+    bot.load_next_step_handlers()
+    bot.infinity_polling()
+
+
+if __name__ == '__main__':
+    run_organizer_bot(TG_TOKEN)
