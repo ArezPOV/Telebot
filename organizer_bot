@@ -12,10 +12,11 @@ telebot.logger.setLevel(logging.DEBUG)
 
 
 class User:
-    def __init__(self, name, currency, money):
+    def __init__(self, user_id, name, currency, balance):
+        self.user_id = user_id
         self.name = name
         self.currency = currency
-        self.money = money
+        self.balance = balance
 
 
 def run_organizer_bot(token: str) -> None:
@@ -26,8 +27,9 @@ def run_organizer_bot(token: str) -> None:
     @bot.message_handler(commands=['help', 'start'])
     def welcome_screen(message):
         chat_id = message.chat.id
-        user = User(name=message.from_user.first_name, currency=None, money=None)
+        user = User(user_id=message.from_user.id, name=message.from_user.first_name, currency=None, balance=None)
         user_dict[chat_id] = user
+        save_user_data_to_file(user)
 
         welcome_sticker = open('images/leo.webp', 'rb')
         bot.send_sticker(message.chat.id, welcome_sticker)
@@ -39,34 +41,41 @@ def run_organizer_bot(token: str) -> None:
                                           "2. Gather information about your expenditures\n"
                                           "3. Analyze the collected data and provide information about " +
                          "significant expenses.\n"
-                                          "4. Offer advice on reducing expenses based on the gathered data.")
+                         "4. Offer advice on reducing expenses based on the gathered data.")
+        bot.send_message(message.chat.id, "Write <b>/registration</b>, if you are new user", parse_mode='html')
 
-        markup_main = types.ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True, row_width=2)
-        key_reg = types.KeyboardButton("/registration")
-        key_balance = types.KeyboardButton("/my_balance")
-        key_add_money = types.KeyboardButton("/add_money")
-        markup_main.add(key_reg, key_balance, key_add_money)
-        bot.send_message(message.chat.id, "Hello "
-                         + message.from_user.first_name
-                         + ", what do you like to do?", reply_markup=markup_main)
+        markup = types.InlineKeyboardMarkup()
+        balance = types.InlineKeyboardButton('Balance', callback_data=my_balance)
+        expenses = types.InlineKeyboardButton('Expenses', callback_data=None)
+        purchases = types.InlineKeyboardButton('Purchases', callback_data=None)
+        advice = types.InlineKeyboardButton('Everyday advice', callback_data=None)
+        markup.add(balance, expenses, purchases, advice)
+
+        if message.text == '/registration':
+            markup = types.ReplyKeyboardRemove(selective=False)
 
     @bot.message_handler(commands=['registration'])
     def add_currency(message):
         try:
-            chat_id = message.chat.id
-            user = user_dict[chat_id]
             markup = types.ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
             key_usd = types.KeyboardButton('US Dollar 🇺🇸')
             key_eur = types.KeyboardButton('Euro 🇪🇺')
             key_rub = types.KeyboardButton('Ruble 🇷🇺')
             markup.add(key_usd, key_eur, key_rub)
-            bot.send_message(chat_id, 'Your currency?', reply_markup=markup)
+            msg = bot.send_message(message.from_user.id, 'Your currency?', reply_markup=markup)
+            bot.register_next_step_handler(msg, process_currency)
+
+        except Exception as e:
+            bot.reply_to(message, 'Something is wrong, try again!')
+
+    def process_currency(message):
+        try:
+            chat_id = message.chat.id
+            user = user_dict[chat_id]
             user.currency = message.text
-            if message.text == key_usd or key_rub or key_eur:
-                msg = bot.send_message(chat_id, "Your balance? (Integer/float)")
-                bot.register_next_step_handler(msg, base_balance)
-            else:
-                bot.send_message(chat_id, 'Just choose currency, push the button!')
+            msg = bot.send_message(chat_id, "Your balance? (Integer/float)")
+            bot.register_next_step_handler(msg, base_balance)
+            save_user_data_to_file(user)
 
         except Exception as e:
             bot.reply_to(message, 'Something is wrong, try again!')
@@ -76,20 +85,37 @@ def run_organizer_bot(token: str) -> None:
             chat_id = message.chat.id
             user = user_dict[chat_id]
 
-            if message.text.isDigit():
+            if message.text.isdigit():
                 user.balance = message.text
                 bot.send_message(chat_id, "Thank you, now you can start recording all your expenses and income")
+                save_user_data_to_file(user)
 
         except Exception as e:
             bot.reply_to(message, 'Something is wrong, try again!')
 
     def save_user_data_to_file(user):
         user_data = pd.DataFrame({
+            'ID': [user.user_id],
             'Name': [user.name],
             'Currency': [user.currency],
-            'Money': [user.money]
+            'Balance': [user.balance]
         })
-        user_data.to_excel("tg_users.xlsx", index=False)
+
+        # if user.user_id not in user_data['ID'].values:
+        user_data.loc[len(user_data.index)] = [user.user_id, user.name, user.currency, user.balance]
+        with pd.ExcelWriter("users.xlsx",
+                            mode="a",
+                            engine="openpyxl",
+                            if_sheet_exists="overlay",
+                            ) as writer:
+            user_data.to_excel(writer, sheet_name="Users")
+
+    @bot.message_handler(content_types=['text'])
+    def my_balance(message):
+        chat_id = message.chat.id
+        user = user_dict[chat_id]
+        if message.text == '/my_balance':
+            bot.send_message(message.chat.id, f"Your balance right now {user.balance} {user.currency}")
 
     bot.enable_save_next_step_handlers(delay=2)
     bot.load_next_step_handlers()
